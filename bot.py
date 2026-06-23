@@ -14,20 +14,14 @@ from telegram.ext import (
 BOT_TOKEN = "8959341115:AAFqmyHEwdWOvr8CQySjrHvzJMYSd5dGhEA"
 BISHKEK_TZ = ZoneInfo("Asia/Bishkek")
 WAITING_BIRTHDAY = 1
-
 users = {}
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
-
 
 def days_lived(birthday_str):
     birthday = datetime.strptime(birthday_str, "%d.%m.%Y").date()
     return (date.today() - birthday).days
-
 
 def days_to_next_birthday(birthday_str):
     birthday = datetime.strptime(birthday_str, "%d.%m.%Y").date()
@@ -36,7 +30,6 @@ def days_to_next_birthday(birthday_str):
     if next_bd <= today:
         next_bd = next_bd.replace(year=today.year + 1)
     return (next_bd - today).days
-
 
 def get_age(birthday_str):
     birthday = datetime.strptime(birthday_str, "%d.%m.%Y").date()
@@ -48,7 +41,6 @@ def get_age(birthday_str):
         last_bd = birthday.replace(year=today.year - 1)
     days_since = (today - last_bd).days
     return years, days_since
-
 
 MOTIVATIONS = [
     "💪 Каждый день — это новый шанс стать лучше. Используй его!",
@@ -83,10 +75,8 @@ MOTIVATIONS = [
     "🎯 Маленький прогресс каждый день — огромный результат через год!",
 ]
 
-
 def get_motivation(days):
     return MOTIVATIONS[days % len(MOTIVATIONS)]
-
 
 def build_daily_message(birthday_str):
     days = days_lived(birthday_str)
@@ -94,7 +84,6 @@ def build_daily_message(birthday_str):
     days_left = days_to_next_birthday(birthday_str)
     motivation = get_motivation(days)
     today = datetime.now(BISHKEK_TZ).strftime("%d.%m.%Y")
-
     return (
         f"🌅 *Доброе утро!*\n\n"
         f"📅 Сегодня: *{today}*\n\n"
@@ -105,18 +94,15 @@ def build_daily_message(birthday_str):
         f"_Хорошего дня! Ты справишься! 💫_"
     )
 
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     name = update.effective_user.first_name or "друг"
-
     if chat_id in users:
         days = days_lived(users[chat_id])
         years, days_since = get_age(users[chat_id])
         days_left = days_to_next_birthday(users[chat_id])
         await update.message.reply_text(
-            f"👋 Привет, {name}!\n\n"
-            f"Ты уже зарегистрирован ✅\n\n"
+            f"👋 Привет, {name}!\n\nТы уже зарегистрирован ✅\n\n"
             f"🎂 Тебе *{years} лет* и *{days_since} дней*\n"
             f"🔢 Прожито: *{days:,} дней*\n"
             f"📆 До дня рождения: *{days_left} дней*\n\n"
@@ -127,8 +113,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
         return ConversationHandler.END
-
-    # Новый пользователь — рассказываем что умеем
     await update.message.reply_text(
         f"👋 Привет, {name}! Я твой личный счётчик жизни!\n\n"
         f"Вот что я умею:\n\n"
@@ -139,50 +123,34 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"⏰ Каждое утро в *8:00 по Бишкеку* я буду писать тебе сам!\n\n"
         f"━━━━━━━━━━━━━━━\n"
         f"📅 Напиши свою дату рождения в формате:\n\n"
-        f"*ДД.ММ.ГГГГ*\n\n"
-        f"Например: `12.12.2004`",
+        f"*ДД.ММ.ГГГГ*\n\nНапример: `12.12.2004`",
         parse_mode="Markdown"
     )
     return WAITING_BIRTHDAY
-
 
 async def set_birthday_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        f"📅 Напиши свою дату рождения в формате:\n\n"
-        f"*ДД.ММ.ГГГГ*\n\n"
-        f"Например: `12.12.2004`",
+        f"📅 Напиши свою дату рождения в формате:\n\n*ДД.ММ.ГГГГ*\n\nНапример: `12.12.2004`",
         parse_mode="Markdown"
     )
     return WAITING_BIRTHDAY
-
 
 async def receive_birthday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     chat_id = update.effective_chat.id
     name = update.effective_user.first_name or "друг"
-
     try:
         birthday = datetime.strptime(text, "%d.%m.%Y").date()
-
         if birthday > date.today():
-            await update.message.reply_text(
-                "❌ Дата рождения не может быть в будущем!\n\n"
-                "Попробуй ещё раз, например: `12.12.2004`",
-                parse_mode="Markdown"
-            )
+            await update.message.reply_text("❌ Дата рождения не может быть в будущем!\n\nПопробуй ещё раз, например: `12.12.2004`", parse_mode="Markdown")
             return WAITING_BIRTHDAY
-
         if (date.today() - birthday).days > 365 * 100:
-            await update.message.reply_text(
-                "❌ Слишком старая дата. Попробуй ещё раз:"
-            )
+            await update.message.reply_text("❌ Слишком старая дата. Попробуй ещё раз:")
             return WAITING_BIRTHDAY
-
         users[chat_id] = text
         days = days_lived(text)
         years, days_since = get_age(text)
         days_left = days_to_next_birthday(text)
-
         await update.message.reply_text(
             f"✅ Отлично, {name}! Всё сохранил!\n\n"
             f"🎂 Тебе *{years} лет* и *{days_since} дней*\n"
@@ -194,95 +162,61 @@ async def receive_birthday(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
         return ConversationHandler.END
-
     except ValueError:
-        await update.message.reply_text(
-            f"❌ Не понял дату!\n\n"
-            f"Напиши в формате *ДД.ММ.ГГГГ*\n\n"
-            f"Например: `12.12.2004`",
-            parse_mode="Markdown"
-        )
+        await update.message.reply_text("❌ Не понял дату!\n\nНапиши в формате *ДД.ММ.ГГГГ*\n\nНапример: `12.12.2004`", parse_mode="Markdown")
         return WAITING_BIRTHDAY
-
 
 async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if chat_id not in users:
-        await update.message.reply_text(
-            "❗ Сначала зарегистрируйся!\n\nНапиши /start"
-        )
+        await update.message.reply_text("❗ Сначала зарегистрируйся!\n\nНапиши /start")
         return
     message = build_daily_message(users[chat_id])
     await update.message.reply_text(message, parse_mode="Markdown")
-
 
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if chat_id in users:
         del users[chat_id]
-        await update.message.reply_text(
-            "😔 Уведомления отключены.\n\n"
-            "Чтобы снова включить — напиши /start"
-        )
+        await update.message.reply_text("😔 Уведомления отключены.\n\nЧтобы снова включить — напиши /start")
     else:
-        await update.message.reply_text(
-            "Ты ещё не зарегистрирован.\n\nНапиши /start"
-        )
-
+        await update.message.reply_text("Ты ещё не зарегистрирован.\n\nНапиши /start")
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Отменено.\n\nНапиши /start чтобы начать заново."
-    )
+    await update.message.reply_text("Отменено.\n\nНапиши /start чтобы начать заново.")
     return ConversationHandler.END
 
-
 async def send_daily_messages(context: ContextTypes.DEFAULT_TYPE):
-    logger.info(f"Отправка утренних сообщений. Пользователей: {len(users)}")
     for chat_id, birthday_str in list(users.items()):
         try:
             message = build_daily_message(birthday_str)
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=message,
-                parse_mode="Markdown"
-            )
-            logger.info(f"Отправлено: {chat_id}")
+            await context.bot.send_message(chat_id=chat_id, text=message, parse_mode="Markdown")
         except Exception as e:
             logger.error(f"Ошибка {chat_id}: {e}")
 
-
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
-
     conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler("start", start),
             CommandHandler("setbirthday", set_birthday_command),
         ],
         states={
-            WAITING_BIRTHDAY: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_birthday)
-            ],
+            WAITING_BIRTHDAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_birthday)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
-
     app.add_handler(conv_handler)
     app.add_handler(CommandHandler("today", today_command))
     app.add_handler(CommandHandler("stop", stop_command))
-
-    # 8:00 Бишкек = 02:00 UTC
     job_queue = app.job_queue
     job_queue.run_daily(
         send_daily_messages,
         time=time(hour=2, minute=0, tzinfo=ZoneInfo("UTC")),
         name="daily_message"
     )
-
     logger.info("Бот запущен!")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
-
 
 if __name__ == "__main__":
     main()
