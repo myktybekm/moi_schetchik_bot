@@ -11,7 +11,7 @@ from telegram.ext import (
     ConversationHandler,
 )
 
-BOT_TOKEN = "8959341115:AAFqmyHEwdWOvr8CQySjrHvzJMYSd5dGhEA"
+BOT_TOKEN = "BOT_TOKEN"
 BISHKEK_TZ = ZoneInfo("Asia/Bishkek")
 WAITING_BIRTHDAY = 1
 users = {}
