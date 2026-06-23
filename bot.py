@@ -1,222 +1,388 @@
+```python
+import os
 import logging
+import sqlite3
 from datetime import datetime, date, time
+from html import escape
 from zoneinfo import ZoneInfo
+
 from telegram import Update
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
-    filters,
-    ContextTypes,
     ConversationHandler,
+    ContextTypes,
+    filters,
 )
 
-BOT_TOKEN = "BOT_TOKEN"
+BOT_TOKEN = os.environ["BOT_TOKEN"]
 BISHKEK_TZ = ZoneInfo("Asia/Bishkek")
 WAITING_BIRTHDAY = 1
-users = {}
+DB_FILE = "users.db"
 
-logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
 logger = logging.getLogger(__name__)
 
+
+def create_database():
+    with sqlite3.connect(DB_FILE) as connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                chat_id INTEGER PRIMARY KEY,
+                birthday TEXT NOT NULL
+            )
+            """
+        )
+
+
+def save_user(chat_id, birthday):
+    with sqlite3.connect(DB_FILE) as connection:
+        connection.execute(
+            """
+            INSERT OR REPLACE INTO users (chat_id, birthday)
+            VALUES (?, ?)
+            """,
+            (chat_id, birthday),
+        )
+
+
+def get_user_birthday(chat_id):
+    with sqlite3.connect(DB_FILE) as connection:
+        result = connection.execute(
+            "SELECT birthday FROM users WHERE chat_id = ?",
+            (chat_id,),
+        ).fetchone()
+
+    return result[0] if result else None
+
+
+def delete_user(chat_id):
+    with sqlite3.connect(DB_FILE) as connection:
+        connection.execute(
+            "DELETE FROM users WHERE chat_id = ?",
+            (chat_id,),
+        )
+
+
+def get_all_users():
+    with sqlite3.connect(DB_FILE) as connection:
+        return connection.execute(
+            "SELECT chat_id, birthday FROM users"
+        ).fetchall()
+
+
+def today_bishkek():
+    return datetime.now(BISHKEK_TZ).date()
+
+
+def parse_birthday(birthday_str):
+    return datetime.strptime(birthday_str, "%d.%m.%Y").date()
+
+
+def birthday_for_year(birthday, year):
+    try:
+        return birthday.replace(year=year)
+    except ValueError:
+        return date(year, 2, 28)
+
+
 def days_lived(birthday_str):
-    birthday = datetime.strptime(birthday_str, "%d.%m.%Y").date()
-    return (date.today() - birthday).days
+    birthday = parse_birthday(birthday_str)
+    return (today_bishkek() - birthday).days
+
 
 def days_to_next_birthday(birthday_str):
-    birthday = datetime.strptime(birthday_str, "%d.%m.%Y").date()
-    today = date.today()
-    next_bd = birthday.replace(year=today.year)
-    if next_bd <= today:
-        next_bd = next_bd.replace(year=today.year + 1)
-    return (next_bd - today).days
+    birthday = parse_birthday(birthday_str)
+    today = today_bishkek()
+
+    next_birthday = birthday_for_year(birthday, today.year)
+
+    if next_birthday <= today:
+        next_birthday = birthday_for_year(birthday, today.year + 1)
+
+    return (next_birthday - today).days
+
 
 def get_age(birthday_str):
-    birthday = datetime.strptime(birthday_str, "%d.%m.%Y").date()
-    today = date.today()
+    birthday = parse_birthday(birthday_str)
+    today = today_bishkek()
+
     years = today.year - birthday.year
-    last_bd = birthday.replace(year=today.year)
-    if last_bd > today:
+    birthday_this_year = birthday_for_year(birthday, today.year)
+
+    if today < birthday_this_year:
         years -= 1
-        last_bd = birthday.replace(year=today.year - 1)
-    days_since = (today - last_bd).days
+        last_birthday = birthday_for_year(birthday, today.year - 1)
+    else:
+        last_birthday = birthday_this_year
+
+    days_since = (today - last_birthday).days
     return years, days_since
+
 
 MOTIVATIONS = [
     "💪 Каждый день — это новый шанс стать лучше. Используй его!",
     "🔥 Ты уже столько прошёл — не останавливайся сейчас!",
-    "🌟 Великие дела начинаются с маленьких шагов. Сделай свой шаг сегодня!",
+    "🌟 Великие дела начинаются с маленьких шагов.",
     "🚀 Твоё будущее создаётся прямо сейчас. Действуй!",
     "⚡ Энергия, фокус, результат — сегодня твой день!",
-    "🎯 У тебя есть цель? Иди к ней. Нет цели? Найди её сегодня!",
-    "🌈 После любой бури приходит солнце. Улыбнись новому дню!",
-    "💡 Умные люди учатся каждый день. Чему научишься сегодня?",
-    "🏆 Победители делают выбор каждое утро. Ты выбираешь победу?",
-    "🌱 Расти каждый день — даже на 1% лучше!",
-    "💎 Алмаз — это уголь, который выдержал давление. Держись!",
-    "🦁 Просыпайся как лев — голодный до успеха!",
-    "⭐ Твои мечты не случайны — они даны тебе не зря!",
-    "🌊 Двигайся вперёд — как волна, которую не остановить!",
-    "🔑 Ключ к успеху — делать то, что другие откладывают!",
-    "🌅 Каждый рассвет говорит: у тебя есть ещё один шанс!",
-    "💫 Верь в себя даже когда никто другой не верит!",
-    "🌍 Мир принадлежит тем, кто действует смело!",
-    "🏃 Начни сейчас, усовершенствуй по пути!",
-    "✨ Ты сильнее, умнее и способнее, чем думаешь!",
-    "🎪 Жизнь слишком коротка — наполни её смыслом!",
-    "🦅 Поднимись выше — туда, где твоё место!",
-    "💰 Инвестируй в себя — это самый выгодный вклад!",
-    "🎭 Каждый день — новая страница твоей истории!",
-    "🌻 Поворачивайся к солнцу — тени останутся позади!",
-    "🏋️ Характер строится не в комфорте, а в преодолении!",
-    "🎸 Живи так, чтобы было что вспомнить!",
-    "🔥 Не жди подходящего момента — создай его сам!",
-    "🌙 Даже луна проходит через тёмные ночи, но всегда светит снова!",
-    "🎯 Маленький прогресс каждый день — огромный результат через год!",
+    "🎯 Маленький прогресс каждый день даёт большой результат.",
+    "🌈 После любой бури приходит солнце.",
+    "💡 Чему новому ты научишься сегодня?",
+    "🏆 Победители продолжают действовать.",
+    "🌱 Становись лучше хотя бы на 1% каждый день.",
 ]
+
 
 def get_motivation(days):
     return MOTIVATIONS[days % len(MOTIVATIONS)]
+
 
 def build_daily_message(birthday_str):
     days = days_lived(birthday_str)
     years, days_since = get_age(birthday_str)
     days_left = days_to_next_birthday(birthday_str)
-    motivation = get_motivation(days)
     today = datetime.now(BISHKEK_TZ).strftime("%d.%m.%Y")
+
     return (
-        f"🌅 *Доброе утро!*\n\n"
-        f"📅 Сегодня: *{today}*\n\n"
-        f"🎂 Тебе *{years} лет* и *{days_since} дней*\n"
-        f"🔢 Всего прожито: *{days:,} дней*\n"
-        f"📆 До дня рождения: *{days_left} дней*\n\n"
-        f"{motivation}\n\n"
-        f"_Хорошего дня! Ты справишься! 💫_"
+        "🌅 <b>Доброе утро!</b>\n\n"
+        f"📅 Сегодня: <b>{today}</b>\n\n"
+        f"🎂 Тебе <b>{years} лет и {days_since} дней</b>\n"
+        f"🔢 Всего прожито: <b>{days:,} дней</b>\n"
+        f"📆 До дня рождения: <b>{days_left} дней</b>\n\n"
+        f"{get_motivation(days)}\n\n"
+        "<i>Хорошего дня!</i>"
     )
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    name = update.effective_user.first_name or "друг"
-    if chat_id in users:
-        days = days_lived(users[chat_id])
-        years, days_since = get_age(users[chat_id])
-        days_left = days_to_next_birthday(users[chat_id])
+    name = escape(update.effective_user.first_name or "друг")
+    birthday_str = get_user_birthday(chat_id)
+
+    if birthday_str:
+        days = days_lived(birthday_str)
+        years, days_since = get_age(birthday_str)
+        days_left = days_to_next_birthday(birthday_str)
+
         await update.message.reply_text(
-            f"👋 Привет, {name}!\n\nТы уже зарегистрирован ✅\n\n"
-            f"🎂 Тебе *{years} лет* и *{days_since} дней*\n"
-            f"🔢 Прожито: *{days:,} дней*\n"
-            f"📆 До дня рождения: *{days_left} дней*\n\n"
-            f"Каждый день в *8:00 утра по Бишкеку* я пишу тебе 🌅\n\n"
-            f"👉 /today — получить сообщение прямо сейчас\n"
-            f"👉 /setbirthday — изменить дату рождения\n"
-            f"👉 /stop — отключить уведомления",
-            parse_mode="Markdown"
+            f"👋 Привет, {name}!\n\n"
+            "Ты уже зарегистрирован ✅\n\n"
+            f"🎂 Тебе <b>{years} лет и {days_since} дней</b>\n"
+            f"🔢 Прожито: <b>{days:,} дней</b>\n"
+            f"📆 До дня рождения: <b>{days_left} дней</b>\n\n"
+            "⏰ Сообщение приходит каждый день в 08:00 по Бишкеку.\n\n"
+            "/today — сообщение сейчас\n"
+            "/setbirthday — изменить дату\n"
+            "/stop — отключить уведомления",
+            parse_mode="HTML",
         )
         return ConversationHandler.END
+
     await update.message.reply_text(
-        f"👋 Привет, {name}! Я твой личный счётчик жизни!\n\n"
-        f"Вот что я умею:\n\n"
-        f"🎂 Скажу сколько тебе лет и дней\n"
-        f"🔢 Покажу сколько дней ты уже прожил\n"
-        f"📆 Напомню сколько дней до твоего дня рождения\n"
-        f"💪 Каждый день буду мотивировать тебя — каждый раз новые слова!\n\n"
-        f"⏰ Каждое утро в *8:00 по Бишкеку* я буду писать тебе сам!\n\n"
-        f"━━━━━━━━━━━━━━━\n"
-        f"📅 Напиши свою дату рождения в формате:\n\n"
-        f"*ДД.ММ.ГГГГ*\n\nНапример: `12.12.2004`",
-        parse_mode="Markdown"
+        f"👋 Привет, {name}!\n\n"
+        "Я покажу твой возраст, прожитые дни и дни до дня рождения.\n\n"
+        "📅 Напиши дату рождения:\n"
+        "<b>ДД.ММ.ГГГГ</b>\n\n"
+        "Например: <code>12.12.2004</code>",
+        parse_mode="HTML",
     )
+
     return WAITING_BIRTHDAY
 
-async def set_birthday_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+async def set_birthday_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
     await update.message.reply_text(
-        f"📅 Напиши свою дату рождения в формате:\n\n*ДД.ММ.ГГГГ*\n\nНапример: `12.12.2004`",
-        parse_mode="Markdown"
+        "📅 Напиши дату рождения:\n\n"
+        "<b>ДД.ММ.ГГГГ</b>\n\n"
+        "Например: <code>12.12.2004</code>",
+        parse_mode="HTML",
     )
+
     return WAITING_BIRTHDAY
 
-async def receive_birthday(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
+
+async def receive_birthday(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    birthday_text = update.message.text.strip()
     chat_id = update.effective_chat.id
-    name = update.effective_user.first_name or "друг"
+    name = escape(update.effective_user.first_name or "друг")
+
     try:
-        birthday = datetime.strptime(text, "%d.%m.%Y").date()
-        if birthday > date.today():
-            await update.message.reply_text("❌ Дата рождения не может быть в будущем!\n\nПопробуй ещё раз, например: `12.12.2004`", parse_mode="Markdown")
+        birthday = parse_birthday(birthday_text)
+        today = today_bishkek()
+
+        if birthday > today:
+            await update.message.reply_text(
+                "❌ Дата рождения не может быть в будущем."
+            )
             return WAITING_BIRTHDAY
-        if (date.today() - birthday).days > 365 * 100:
-            await update.message.reply_text("❌ Слишком старая дата. Попробуй ещё раз:")
+
+        if (today - birthday).days > 36525:
+            await update.message.reply_text(
+                "❌ Возраст не может быть больше 100 лет."
+            )
             return WAITING_BIRTHDAY
-        users[chat_id] = text
-        days = days_lived(text)
-        years, days_since = get_age(text)
-        days_left = days_to_next_birthday(text)
+
+        save_user(chat_id, birthday_text)
+
+        days = days_lived(birthday_text)
+        years, days_since = get_age(birthday_text)
+        days_left = days_to_next_birthday(birthday_text)
+
         await update.message.reply_text(
-            f"✅ Отлично, {name}! Всё сохранил!\n\n"
-            f"🎂 Тебе *{years} лет* и *{days_since} дней*\n"
-            f"🔢 Всего прожито: *{days:,} дней*\n"
-            f"📆 До дня рождения: *{days_left} дней*\n\n"
-            f"⏰ Теперь каждый день в *8:00 утра по Бишкеку* я буду писать тебе!\n\n"
-            f"Желаю удачи и жди уведомления! 🚀\n\n"
-            f"👉 Хочешь увидеть прямо сейчас? Напиши /today",
-            parse_mode="Markdown"
+            f"✅ Готово, {name}!\n\n"
+            f"🎂 Тебе <b>{years} лет и {days_since} дней</b>\n"
+            f"🔢 Прожито: <b>{days:,} дней</b>\n"
+            f"📆 До дня рождения: <b>{days_left} дней</b>\n\n"
+            "⏰ Каждый день в 08:00 по Бишкеку я пришлю сообщение.\n\n"
+            "/today — проверить сейчас",
+            parse_mode="HTML",
         )
+
         return ConversationHandler.END
+
     except ValueError:
-        await update.message.reply_text("❌ Не понял дату!\n\nНапиши в формате *ДД.ММ.ГГГГ*\n\nНапример: `12.12.2004`", parse_mode="Markdown")
+        await update.message.reply_text(
+            "❌ Неверная дата.\n\n"
+            "Напиши так: <code>12.12.2004</code>",
+            parse_mode="HTML",
+        )
         return WAITING_BIRTHDAY
 
-async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    if chat_id not in users:
-        await update.message.reply_text("❗ Сначала зарегистрируйся!\n\nНапиши /start")
+
+async def today_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    birthday_str = get_user_birthday(update.effective_chat.id)
+
+    if not birthday_str:
+        await update.message.reply_text(
+            "❗ Сначала нажми /start"
+        )
         return
-    message = build_daily_message(users[chat_id])
-    await update.message.reply_text(message, parse_mode="Markdown")
 
-async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        build_daily_message(birthday_str),
+        parse_mode="HTML",
+    )
+
+
+async def stop_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
     chat_id = update.effective_chat.id
-    if chat_id in users:
-        del users[chat_id]
-        await update.message.reply_text("😔 Уведомления отключены.\n\nЧтобы снова включить — напиши /start")
-    else:
-        await update.message.reply_text("Ты ещё не зарегистрирован.\n\nНапиши /start")
+    birthday_str = get_user_birthday(chat_id)
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Отменено.\n\nНапиши /start чтобы начать заново.")
+    if birthday_str:
+        delete_user(chat_id)
+        await update.message.reply_text(
+            "Уведомления отключены.\n\n"
+            "Чтобы включить снова, нажми /start"
+        )
+    else:
+        await update.message.reply_text(
+            "Ты ещё не зарегистрирован.\n\nНажми /start"
+        )
+
+
+async def cancel(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    await update.message.reply_text(
+        "Отменено. Нажми /start, чтобы начать снова."
+    )
     return ConversationHandler.END
 
-async def send_daily_messages(context: ContextTypes.DEFAULT_TYPE):
-    for chat_id, birthday_str in list(users.items()):
+
+async def send_daily_messages(
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    for chat_id, birthday_str in get_all_users():
         try:
-            message = build_daily_message(birthday_str)
-            await context.bot.send_message(chat_id=chat_id, text=message, parse_mode="Markdown")
-        except Exception as e:
-            logger.error(f"Ошибка {chat_id}: {e}")
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=build_daily_message(birthday_str),
+                parse_mode="HTML",
+            )
+        except Exception:
+            logger.exception(
+                "Не удалось отправить сообщение пользователю %s",
+                chat_id,
+            )
+
+
+async def error_handler(update, context):
+    logger.exception(
+        "Ошибка при обработке сообщения",
+        exc_info=context.error,
+    )
+
 
 def main():
+    create_database()
+
     app = Application.builder().token(BOT_TOKEN).build()
-    conv_handler = ConversationHandler(
+
+    conversation_handler = ConversationHandler(
         entry_points=[
             CommandHandler("start", start),
             CommandHandler("setbirthday", set_birthday_command),
         ],
         states={
-            WAITING_BIRTHDAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_birthday)],
+            WAITING_BIRTHDAY: [
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND,
+                    receive_birthday,
+                )
+            ]
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[
+            CommandHandler("cancel", cancel)
+        ],
     )
-    app.add_handler(conv_handler)
+
+    app.add_handler(conversation_handler)
     app.add_handler(CommandHandler("today", today_command))
     app.add_handler(CommandHandler("stop", stop_command))
-    job_queue = app.job_queue
-    job_queue.run_daily(
+    app.add_error_handler(error_handler)
+
+    if app.job_queue is None:
+        raise RuntimeError(
+            "Добавь python-telegram-bot[job-queue] "
+            "в requirements.txt"
+        )
+
+    app.job_queue.run_daily(
         send_daily_messages,
-        time=time(hour=2, minute=0, tzinfo=ZoneInfo("UTC")),
-        name="daily_message"
+        time=time(
+            hour=8,
+            minute=0,
+            tzinfo=BISHKEK_TZ,
+        ),
+        name="daily_message",
     )
-    logger.info("Бот запущен!")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+    logger.info("Бот запущен")
+    app.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True,
+    )
+
 
 if __name__ == "__main__":
     main()
+```
