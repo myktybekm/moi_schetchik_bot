@@ -5,13 +5,19 @@ from datetime import datetime, date, time
 from html import escape
 from zoneinfo import ZoneInfo
 
-from telegram import Update
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ReplyKeyboardMarkup,
+)
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
     ConversationHandler,
     ContextTypes,
+    CallbackQueryHandler,
     filters,
 )
 
@@ -26,6 +32,132 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+# =========================
+# GTIN-ДАННЫЕ ИЗ EXCEL
+# =========================
+
+GTIN_DATA = {
+    "А-072 Синий": {
+        "S (48)": "04700087620011",
+        "M (50)": "04700087620028",
+        "L (52)": "04700087620035",
+        "XL (54)": "04700087620042",
+        "2XL (56)": "04700087620059",
+        "3XL (58)": "04700087620066",
+        "4XL (60)": "04700087620219",
+        "5XL (62)": "04700087620226",
+        "6XL (64)": "04700087621148",
+    },
+    "А-072 Черный": {
+        "S (48)": "04700087620134",
+        "M (50)": "04700087620141",
+        "L (52)": "04700087620158",
+        "XL (54)": "04700087620165",
+        "2XL (56)": "04700087620172",
+        "3XL (58)": "04700087620189",
+        "4XL (60)": "04700087620370",
+        "5XL (62)": "04700087620387",
+        "6XL (64)": "04700087621155",
+    },
+    "А-105 Синий": {
+        "S (48)": "04700087620714",
+        "M (50)": "04700087620721",
+        "L (52)": "04700087620738",
+        "XL (54)": "04700087620745",
+        "2XL (56)": "04700087620752",
+        "3XL (58)": "04700087620769",
+        "4XL (60)": "04700087620776",
+        "5XL (62)": "04700087620783",
+        "6XL (64)": "04700087621162",
+    },
+    "А-105 Черный": {
+        "S (48)": "04700087620790",
+        "M (50)": "04700087620806",
+        "L (52)": "04700087620813",
+        "XL (54)": "04700087620820",
+        "2XL (56)": "04700087620837",
+        "3XL (58)": "04700087620844",
+        "4XL (60)": "04700087620851",
+        "5XL (62)": "04700087620868",
+        "6XL (64)": "04700087621179",
+    },
+    "А-106 Бордовый": {
+        "S (48)": "04700087620875",
+        "M (50)": "04700087620882",
+        "L (52)": "04700087620899",
+        "XL (54)": "04700087620905",
+        "2XL (56)": "04700087620912",
+        "3XL (58)": "04700087620929",
+        "4XL (60)": "04700087620936",
+        "5XL (62)": "04700087620943",
+        "6XL (64)": "04700087621193",
+    },
+    "А-122 Синий": {
+        "S (48)": "04700087621209",
+        "M (50)": "04700087621216",
+        "L (52)": "04700087621223",
+        "XL (54)": "04700087621230",
+        "2XL (56)": "04700087621247",
+        "3XL (58)": "04700087621254",
+        "4XL (60)": "04700087621261",
+        "5XL (62)": "04700087621278",
+        "6XL (64)": "04700087621285",
+    },
+    "А-122 Черный": {
+        "S (48)": "04700087621292",
+        "M (50)": "04700087621308",
+        "L (52)": "04700087621315",
+        "XL (54)": "04700087621322",
+        "2XL (56)": "04700087621339",
+        "3XL (58)": "04700087621346",
+        "4XL (60)": "04700087621353",
+        "5XL (62)": "04700087621360",
+        "6XL (64)": "04700087621377",
+    },
+    "А-076 Бежевый": {
+        "S (48)": "04700087620950",
+        "M (50)": "04700087620967",
+        "L (52)": "04700087620974",
+        "XL (54)": "04700087620981",
+        "2XL (56)": "04700087620998",
+        "3XL (58)": "04700087621001",
+        "4XL (60)": "04700087621018",
+        "5XL (62)": "04700087621025",
+        "6XL (64)": "04700087621384",
+    },
+}
+
+MODEL_NAMES = list(GTIN_DATA.keys())
+
+
+# =========================
+# КЛАВИАТУРЫ
+# =========================
+
+def main_keyboard():
+    return ReplyKeyboardMarkup(
+        [["📦 GTIN коды"], ["📅 Сегодня", "⚙️ Изменить дату"]],
+        resize_keyboard=True,
+    )
+
+
+def models_keyboard():
+    rows = []
+    for index, model_name in enumerate(MODEL_NAMES):
+        rows.append([
+            InlineKeyboardButton(
+                model_name,
+                callback_data=f"gtin_model:{index}",
+            )
+        ])
+
+    return InlineKeyboardMarkup(rows)
+
+
+# =========================
+# БАЗА ПОЛЬЗОВАТЕЛЕЙ
+# =========================
 
 def create_database():
     with sqlite3.connect(DB_FILE) as connection:
@@ -74,6 +206,10 @@ def get_all_users():
             "SELECT chat_id, birthday FROM users"
         ).fetchall()
 
+
+# =========================
+# РАСЧЁТ ДАТ
+# =========================
 
 def today_bishkek():
     return datetime.now(BISHKEK_TZ).date()
@@ -159,6 +295,71 @@ def build_daily_message(birthday_str):
     )
 
 
+# =========================
+# GTIN-МЕНЮ
+# =========================
+
+async def gtin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "📦 Выбери модель:",
+        reply_markup=models_keyboard(),
+    )
+
+
+async def gtin_model_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        index = int(query.data.split(":")[1])
+        model_name = MODEL_NAMES[index]
+    except (ValueError, IndexError):
+        await query.edit_message_text("Ошибка выбора модели.")
+        return
+
+    lines = [f"📦 <b>{model_name}</b>\n"]
+
+    for size_name, gtin in GTIN_DATA[model_name].items():
+        lines.append(
+            f"<b>{size_name}</b> — <code>{gtin}</code>"
+        )
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "⬅️ Назад",
+                callback_data="gtin_back",
+            )
+        ]
+    ])
+
+    await query.edit_message_text(
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=keyboard,
+    )
+
+
+async def gtin_back_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    query = update.callback_query
+    await query.answer()
+
+    await query.edit_message_text(
+        "📦 Выбери модель:",
+        reply_markup=models_keyboard(),
+    )
+
+
+# =========================
+# КОМАНДЫ БОТА
+# =========================
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     name = escape(update.effective_user.first_name or "друг")
@@ -175,21 +376,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🎂 Тебе <b>{years} лет и {days_since} дней</b>\n"
             f"🔢 Прожито: <b>{days:,} дней</b>\n"
             f"📆 До дня рождения: <b>{days_left} дней</b>\n\n"
-            "⏰ Сообщение приходит каждый день в 08:00 по Бишкеку.\n\n"
-            "/today — сообщение сейчас\n"
-            "/setbirthday — изменить дату\n"
-            "/stop — отключить уведомления",
+            "⏰ Сообщение приходит каждый день в 08:00 по Бишкеку.",
             parse_mode="HTML",
+            reply_markup=main_keyboard(),
         )
         return ConversationHandler.END
 
     await update.message.reply_text(
         f"👋 Привет, {name}!\n\n"
-        "Я покажу твой возраст, прожитые дни и дни до дня рождения.\n\n"
+        "Я покажу твой возраст, прожитые дни и GTIN-коды товаров.\n\n"
         "📅 Напиши дату рождения:\n"
         "<b>ДД.ММ.ГГГГ</b>\n\n"
         "Например: <code>12.12.2004</code>",
         parse_mode="HTML",
+        reply_markup=main_keyboard(),
     )
 
     return WAITING_BIRTHDAY
@@ -244,9 +444,9 @@ async def receive_birthday(
             f"🎂 Тебе <b>{years} лет и {days_since} дней</b>\n"
             f"🔢 Прожито: <b>{days:,} дней</b>\n"
             f"📆 До дня рождения: <b>{days_left} дней</b>\n\n"
-            "⏰ Каждый день в 08:00 по Бишкеку я пришлю сообщение.\n\n"
-            "/today — проверить сейчас",
+            "⏰ Каждый день в 08:00 по Бишкеку я пришлю сообщение.",
             parse_mode="HTML",
+            reply_markup=main_keyboard(),
         )
 
         return ConversationHandler.END
@@ -275,6 +475,7 @@ async def today_command(
     await update.message.reply_text(
         build_daily_message(birthday_str),
         parse_mode="HTML",
+        reply_markup=main_keyboard(),
     )
 
 
@@ -316,6 +517,7 @@ async def send_daily_messages(
                 chat_id=chat_id,
                 text=build_daily_message(birthday_str),
                 parse_mode="HTML",
+                reply_markup=main_keyboard(),
             )
         except Exception:
             logger.exception(
@@ -340,11 +542,17 @@ def main():
         entry_points=[
             CommandHandler("start", start),
             CommandHandler("setbirthday", set_birthday_command),
+            MessageHandler(
+                filters.Regex(r"^⚙️ Изменить дату$"),
+                set_birthday_command,
+            ),
         ],
         states={
             WAITING_BIRTHDAY: [
                 MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
+                    filters.TEXT
+                    & ~filters.COMMAND
+                    & ~filters.Regex(r"^📦 GTIN коды$"),
                     receive_birthday,
                 )
             ]
@@ -355,8 +563,38 @@ def main():
     )
 
     app.add_handler(conversation_handler)
+
     app.add_handler(CommandHandler("today", today_command))
     app.add_handler(CommandHandler("stop", stop_command))
+
+    app.add_handler(
+        MessageHandler(
+            filters.Regex(r"^📅 Сегодня$"),
+            today_command,
+        )
+    )
+
+    app.add_handler(
+        MessageHandler(
+            filters.Regex(r"^📦 GTIN коды$"),
+            gtin_menu,
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            gtin_model_callback,
+            pattern=r"^gtin_model:",
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            gtin_back_callback,
+            pattern=r"^gtin_back$",
+        )
+    )
+
     app.add_error_handler(error_handler)
 
     if app.job_queue is None:
@@ -376,6 +614,7 @@ def main():
     )
 
     logger.info("Бот запущен")
+
     app.run_polling(
         allowed_updates=Update.ALL_TYPES,
         drop_pending_updates=True,
